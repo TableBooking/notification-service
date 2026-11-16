@@ -1,0 +1,11 @@
+services:
+  notification:
+    build: .
+    env_file: .env
+    ports: ['127.0.0.1:3005:3005']
+    volumes:
+      - ./keys:/app/keys:ro
+      - ./certs:/app/certs:ro
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s

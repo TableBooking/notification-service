@@ -18,10 +18,10 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import nodemailer from 'nodemailer';
 import { PinoLogger } from 'nestjs-pino';
-import { Database } from './database.js';
-import { config } from './config.js';
-import { AccessGuard, type Principal } from './auth.js';
-import type { StateEvent } from './event.js';
+import { Database } from '../../infrastructure/database/database.service.js';
+import { config } from '../../config/env.js';
+import { AccessGuard, type Principal } from '../../common/auth/access.guard.js';
+import type { StateEvent } from '../../infrastructure/messaging/state-event.js';
 export function emailState(state: string) {
   return ['REQUESTED', 'CONFIRMED', 'REJECTED', 'CANCELLED'].includes(state);
 }
@@ -111,7 +111,11 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
   private loop() {
     if (this.stopped) return;
     this.timer = setTimeout(() => {
-      this.active = this.deliver()
+      this.active = (async () => {
+        for (let i = 0; i < config.DELIVERY_BATCH_SIZE && !this.stopped; i++) {
+          if (!(await this.deliver())) break;
+        }
+      })()
         .catch(() => this.log.warn('Delivery worker iteration failed'))
         .finally(() => this.loop());
     }, config.DELIVERY_POLL_INTERVAL_MS);
@@ -130,7 +134,7 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
       );
       return j;
     });
-    if (!job) return;
+    if (!job) return false;
     const latest = await this.db.pool.query(
       'SELECT latest_version FROM notification.booking_event_cursors WHERE booking_id=$1',
       [job.booking_id],
@@ -140,7 +144,7 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
         "UPDATE notification.notification_jobs SET delivery_status='SKIPPED',skip_reason='STALE_EVENT',locked_until=NULL,lock_token=NULL WHERE id=$1 AND lock_token=$2",
         [job.id, token],
       );
-      return;
+      return true;
     }
     const attempt = job.attempts + 1;
     let success = false;
@@ -149,9 +153,9 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
       port: config.SMTP_PORT,
       secure: config.SMTP_SECURE === 'true',
       requireTLS: config.SMTP_REQUIRE_TLS === 'true',
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
+      connectionTimeout: config.SMTP_TIMEOUT_MS,
+      greetingTimeout: config.SMTP_TIMEOUT_MS,
+      socketTimeout: config.SMTP_TIMEOUT_MS,
       ...(config.SMTP_USER
         ? { auth: { user: config.SMTP_USER, pass: config.SMTP_PASSWORD ?? '' } }
         : {}),
@@ -180,7 +184,9 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
         'INSERT INTO notification.notification_delivery_attempts(job_id,attempt_number,success,error_message) VALUES($1,$2,$3,$4)',
         [job.id, attempt, success, success ? null : 'SMTP delivery failed'],
       );
-      const delay = [30, 120, 600, 1800][Math.min(attempt - 1, 3)] ?? 1800;
+      const delay =
+        (config.DELIVERY_BACKOFF_MS[Math.min(attempt - 1, config.DELIVERY_BACKOFF_MS.length - 1)] ??
+          1800000) / 1000;
       await c.query(
         "UPDATE notification.notification_jobs SET delivery_status=$3,attempts=$4,next_attempt_at=now()+$5*interval '1 second',sent_at=CASE WHEN $6 THEN now() ELSE sent_at END,last_error=$7,locked_until=NULL,lock_token=NULL WHERE id=$1 AND lock_token=$2",
         [
@@ -194,6 +200,7 @@ export class DomainConsumer implements OnModuleInit, OnModuleDestroy {
         ],
       );
     });
+    return true;
   }
   async onModuleDestroy() {
     this.stopped = true;

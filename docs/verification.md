@@ -10,8 +10,8 @@ Cấu hình bàn giao: Supabase thật + RabbitMQ Docker + Mailpit. Đã bỏ b�
 - Kiểm tra outage trước khi dọn bộ demo: tắt Notification, Tracking vẫn xử lý và queue giữ backlog; bật lại Notification, backlog về 0 và email SENT.
 - Image chạy uid 1000, không chứa .env/.env.bootstrap/key; key/CA được mount lúc runtime.
 
-Chưa chứng nhận login Auth thật, E2E với Booking/Operations/frontend, concurrency nhiều tiến trình, HA, kiến trúc CPU khác hoặc chạy trên máy người nhận. SMTP at-least-once vẫn có thể gửi trùng khi crash sau send. Không push Git hay Docker Hub trong lần bàn giao này; tên bao11/notification-service:0.1.0 trong Compose là tag chuẩn bị, không phải bằng chứng đã publish.
+Chưa chứng nhận login Auth thật, E2E với Booking/Operations/frontend, concurrency nhiều tiến trình, HA, kiến trúc CPU khác hoặc chạy trên máy người nhận. SMTP at-least-once vẫn có thể gửi trùng khi crash sau send. Image ứng dụng được build local từ source, không phụ thuộc tài khoản hoặc kho image cá nhân.
 
 Hướng dẫn cấu hình, bootstrap, build và chạy ở [README](../README.md).
 
-Cau hinh Compose da gian luoc duoc kiem tra lai: build image bao11 local, bootstrap qua profile setup, migration tu chay va thoat code 0, hai container healthy tren cong 3005/3004, network chung tablebooking-user3. Event gui trung tren cau hinh nay tao mot job SENT, mot history va email cleanup@example.test trong Mailpit. Khong push len registry.
+Cấu hình Compose đã được kiểm tra: build image local, bootstrap qua profile setup, migration tự chạy và thoát code 0, hai container healthy trên cổng 3005/3004, network chung tablebooking-user3. Event gửi trùng tạo một job SENT, một history và email cleanup@example.test trong Mailpit. Không push.

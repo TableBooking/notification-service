@@ -65,18 +65,11 @@ npm.cmd run provision:broker
 
 Khi hai ứng dụng đã chạy, chúng tự khai báo queue/retry/DLQ. Mailpit giữ email để xem trong trình duyệt, không gửi vào Gmail thật. Để gửi email thật sau này, thay SMTP provider và bỏ override `SMTP_HOST: mailpit` trong Compose.
 
-## Pull image có sẵn
+## Chạy trên máy khác
 
-Compose đặt tên image mặc định `bao11/notification-service:0.1.0`. **Image chưa được publish trong lần bàn giao này.** Hiện tại dùng hướng build source ở trên; không thể pull tag chưa tồn tại.
+Người nhận clone/pull source của repo này, tạo .env riêng, đặt CA/public key và chạy hai lệnh build/up ở trên. Docker tự build image `tablebooking-notification-service:local` và tạo container trên máy người đó. Không cần tài khoản Docker Hub, docker login hay image đã publish.
 
-Sau khi chủ repo publish tag này, người nhận vẫn cần file Compose, .env riêng, CA và public key, rồi chạy:
-
-```powershell
-docker compose pull notification migrate
-docker compose up -d --no-build --wait
-```
-
-Có thể đặt `NOTIFICATION_IMAGE` trong .env để dùng tag khác. Repository image private cần `docker login`. Không có credentials nào được đóng trong image. Các thay đổi Git cũng mới ở main local, chưa push; người nhận chỉ pull được sau khi chủ repo phát hành.
+Supabase vẫn là database bên ngoài: cần URL/password hợp lệ, role/schema đã bootstrap và public key khớp Auth. Nếu dùng cùng project Supabase, các máy sẽ đọc/ghi cùng dữ liệu; RabbitMQ và Mailpit local trên từng máy là riêng.
 
 ## API và kiểm tra
 

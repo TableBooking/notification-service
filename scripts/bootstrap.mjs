@@ -32,6 +32,12 @@ try {
       await c.query(sql.rows[0].format);
     }
   }
+  // Managed PostgreSQL administrators may have CREATEROLE without SUPERUSER.
+  // Schema ownership and default privileges require membership in this role.
+  const membership = await c.query(
+    "SELECT format('GRANT notification_migrator TO %I', current_user)",
+  );
+  await c.query(membership.rows[0].format);
   await c.query('CREATE SCHEMA IF NOT EXISTS notification AUTHORIZATION notification_migrator');
   await c.query('GRANT USAGE ON SCHEMA notification TO notification_app');
   await c.query(

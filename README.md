@@ -1,49 +1,106 @@
-# TableBooking notification service
+# Notification service
 
-NestJS 12 / Node 24 / TypeScript ESM, PostgreSQL trên Supabase, RabbitMQ lifecycle consumer.
+Nhận `booking.state-changed.v1`, lưu thông báo và gửi email demo vào Mailpit. Database nằm trên **Supabase**; Compose chỉ chạy ứng dụng, migration, RabbitMQ và Mailpit. Không có PostgreSQL local hay bộ deploy/demo.
 
-## Bắt đầu
+## Chuẩn bị Supabase và Auth
 
-1. npm ci
-2. Copy .env.example thành .env; điền URL/password, CA và JWT public key (xem docs/external-services.md).
-3. npm run build && npm run migrate
-4. npm run dev hoặc npm start
+Chỉ cần Docker Desktop chạy Linux containers, Docker Compose v2.24+ và Git để lấy source; không cần cài Node nếu chạy bằng Docker.
 
-Cổng mặc định 3005; /health/live và /health/ready là probe nội bộ, không được gateway proxy. Runtime role riêng, migration riêng; không JOIN/FK xuyên service. Node đọc .env khi file tồn tại.
+1. Copy `.env.example` thành `.env` **chỉ khi chưa có file**. Không copy đè file đã điền.
+2. Trong Supabase chọn **Connect → Session pooler**, dùng host được cung cấp, port `5432`, database `postgres`. Điền project ref và password đã URL-encode vào hai URL DB; không thêm `sslmode` vào URL.
+3. Tải CA certificate của project vào `certs/supabase-ca.crt`.
+4. Nhận public key RSA từ Auth và đặt tại `keys/auth-public.pem`. Không dùng private key, Supabase anon key hay service-role API key.
+5. Nếu role/schema đã được bootstrap thì bỏ qua bước tạo DB dưới đây. Nếu là project mới, copy `.env.bootstrap.example` thành `.env.bootstrap`; điền URL quản trị và tự đặt hai mật khẩu app/migrator. Mật khẩu trong hai biến riêng là nguyên bản; mật khẩu trong URL phải URL-encode.
 
-## API
+Bootstrap cấp quyền thành viên migrator cho tài khoản quản trị để gán schema owner trên Supabase. Script không tự đổi mật khẩu role đã tồn tại. Không commit hoặc chia sẻ `.env`/`.env.bootstrap` thật.
 
-GET /api/notifications/mine
-GET /api/notifications/unread-count
-POST /api/notifications/:id/read
-POST /api/notifications/read-all
-GET /api/notifications/preferences
-PATCH /api/notifications/preferences
+## Chạy từ source vừa clone/pull
 
-Mọi API cần Bearer RS256. CUSTOMER chỉ đọc booking của mình; Notification mọi role chỉ thao tác thông báo của chính sub. Pagination 1/20, max 100. Field nullable tùy chọn bị bỏ khỏi response để bám OpenAPI hiện có. Status Tracking dùng version, entry timeline dùng aggregateVersion.
+Trong thư mục `notification-service`:
 
-## Kiểm tra
+```powershell
+Copy-Item .env.example .env
+New-Item -ItemType Directory -Force keys, certs
+```
 
-- npm run check ; npm test ; npm run build
-- npm run test:integration: PostgreSQL nhúng PGlite, migration và HTTP thật; không cần Docker/cloud.
-- npm run test:gateway: cần Api-gateway nằm cạnh repo và đã npm ci + npm run build; chạy gateway thật qua HTTP tới backend với DB nhúng và RSA test key.
-- npm run diagnostics -- db hoặc broker: kiểm tra cấu hình cloud đã điền.
+Điền cấu hình và đặt key/CA như trên. Nếu DB mới:
 
-Test HTTP và SQL nhúng không thay thế RabbitMQ/SMTP/cloud E2E, multi-process race hoặc network outage. Cần chạy các ca này khi Docker/cloud sẵn sàng. Không dùng test key cho hệ thống thật.
+```powershell
+Copy-Item .env.bootstrap.example .env.bootstrap
+# Dien file bootstrap truoc khi chay:
+docker compose --profile setup run --rm --build bootstrap
+```
 
-## Docker
+Build và chạy:
 
-Copy .env.docker.example thành .env, điền cấu hình và mount keys/certs. docker compose up --build. Production: SERVICE_IMAGE=tag/digest rồi docker compose -f compose.prod.yaml up -d; network tablebooking-platform phải tồn tại. Migration one-shot: docker compose run --rm notification node dist/migrate.js. Không public DB/AMQP.
+```powershell
+docker compose build
+docker compose up -d --no-build --wait
+docker compose ps -a
+```
 
-## Delivery và event
+Migration tự chạy trước ứng dụng. Container `migrate` thoát code 0 là bình thường. DB đã tạo rồi không cần chạy bootstrap lại. Dừng bản Node đang chiếm cổng 3005 trước khi chạy container.
 
-Chỉ consume booking.state-changed.v1 qua notification.lifecycle.q. ACK sau transaction commit; duplicate eventId ACK không lặp hiệu ứng; retry hữu hạn rồi DLQ. Không publish domain event mới.
-Job và in-app tách bằng preference snapshot. Email chỉ REQUESTED/CONFIRMED/REJECTED/CANCELLED. Worker dùng lease/lock token, SMTP ngoài transaction. Event cũ hơn cursor bị SKIPPED trước gửi. Không thể thu hồi email đang gửi; crash sau SMTP có thể gửi trùng.
+| Thành phần             | Địa chỉ                            |
+| ---------------------- | ---------------------------------- |
+| Readiness              | http://localhost:3005/health/ready |
+| Liveness               | http://localhost:3005/health/live  |
+| RabbitMQ Manager       | http://localhost:15675             |
+| Mailpit                | http://localhost:8025              |
+| AMQP cho Node trên máy | localhost:5675                     |
 
-## Chưa cấu hình
+Đăng nhập RabbitMQ bằng `RABBITMQ_USER`/`RABBITMQ_PASSWORD` trong .env. Khi tạo broker mới, đặt password dài bằng chữ/số/`-`/`_` và dùng cùng password trong RABBITMQ_URL. Đổi env không tự đổi tài khoản đã lưu trong volume.
 
-Bạn cần điền Supabase, RabbitMQ, SMTP và key Auth. Chưa deploy cloud hoặc publish image. Xem docs/external-services.md để lấy từng biến.
+## Chạy cùng Tracking
 
-Bootstrap tiện dụng: copy .env.bootstrap.example thành .env.bootstrap rồi chạy node --env-file=.env.bootstrap scripts/bootstrap.mjs. Chạy npm run provision:broker một lần để tạo cả hai lifecycle queue trước producer. Hai file Compose tích hợp/test ở workspace root có bản được commit trong Tracking deploy/.
+Notification tạo Docker network `tablebooking-user3` và broker có hostname `rabbitmq`. Khởi động repo này trước, rồi chạy Tracking theo README của repo đó. Hai service dùng cùng broker/vhost, mỗi service có queue riêng. Không cần chạy broker Operations/Booking/infrastructure để thử hai service này.
 
-Broker thật: đặt BROKER_TEST_URL (dev), rồi npm run test:broker. Suite tạo exchange/queue có prefix UUID riêng, kiểm tra duplicate và poison → retry → DLQ, rồi dọn đúng tài nguyên test. Chưa chạy suite này nếu chưa có Docker/broker URL.
+Khi chỉ chạy broker trước, tạo cả hai lifecycle queue trước khi phát event:
+
+```powershell
+docker compose up -d rabbitmq mailpit
+# Lenh duoi can Node 24 va npm ci, chi dung neu chua chay hai consumer:
+npm.cmd run provision:broker
+```
+
+Khi hai ứng dụng đã chạy, chúng tự khai báo queue/retry/DLQ. Mailpit giữ email để xem trong trình duyệt, không gửi vào Gmail thật. Để gửi email thật sau này, thay SMTP provider và bỏ override `SMTP_HOST: mailpit` trong Compose.
+
+## Pull image có sẵn
+
+Compose đặt tên image mặc định `bao11/notification-service:0.1.0`. **Image chưa được publish trong lần bàn giao này.** Hiện tại dùng hướng build source ở trên; không thể pull tag chưa tồn tại.
+
+Sau khi chủ repo publish tag này, người nhận vẫn cần file Compose, .env riêng, CA và public key, rồi chạy:
+
+```powershell
+docker compose pull notification migrate
+docker compose up -d --no-build --wait
+```
+
+Có thể đặt `NOTIFICATION_IMAGE` trong .env để dùng tag khác. Repository image private cần `docker login`. Không có credentials nào được đóng trong image. Các thay đổi Git cũng mới ở main local, chưa push; người nhận chỉ pull được sau khi chủ repo phát hành.
+
+## API và kiểm tra
+
+Cả 6 endpoint cần Bearer JWT RS256 đúng Auth (`iss=restaurant-auth`, `aud=restaurant-api`). Mỗi người chỉ thao tác thông báo của chính mình.
+
+| Method | Path                            |
+| ------ | ------------------------------- |
+| GET    | /api/notifications/mine         |
+| GET    | /api/notifications/unread-count |
+| POST   | /api/notifications/:id/read     |
+| POST   | /api/notifications/read-all     |
+| GET    | /api/notifications/preferences  |
+| PATCH  | /api/notifications/preferences  |
+
+Chạy Node để phát triển: `npm ci`, `npm run build`, `npm start`. .env dùng hostname localhost; Compose tự đổi broker/SMTP/key/CA sang đường dẫn container. Không chạy Node và container ứng dụng cùng cổng.
+
+```powershell
+npm.cmd run check
+npm.cmd test
+npm.cmd run test:integration
+npm.cmd run test:gateway
+npm.cmd run build
+```
+
+Test gateway cần repo Api-gateway cạnh repo này, đã cài dependencies và build. Test broker: đặt BROKER_TEST_URL tới broker development, rồi `npm run test:broker`; test dùng prefix riêng, không reset broker. Kết quả và giới hạn đã kiểm chứng: [docs/verification.md](docs/verification.md).
+
+Dừng bằng `docker compose stop`, xem lỗi bằng `docker compose logs --tail=100 notification migrate`. Không xóa volume để sửa lỗi đăng nhập. Email có giới hạn at-least-once: crash sau SMTP trước mark SENT có thể gửi trùng; inbox chỉ chống lặp xử lý event.

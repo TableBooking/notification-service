@@ -1,11 +1,76 @@
 services:
+  bootstrap:
+    profiles: ['setup']
+    image: ${NOTIFICATION_IMAGE:-bao11/notification-service:0.1.0}
+    build: .
+    command: ['node', 'scripts/bootstrap.mjs']
+    env_file:
+      - path: .env.bootstrap
+        required: false
+    environment:
+      DB_SSL_CA_PATH: /app/certs/supabase-ca.crt
+    volumes: ['./certs:/app/certs:ro']
+    restart: 'no'
+
+  migrate:
+    image: ${NOTIFICATION_IMAGE:-bao11/notification-service:0.1.0}
+    command: ['node', 'dist/migrate.js']
+    env_file: .env
+    environment:
+      DB_SSL_CA_PATH: /app/certs/supabase-ca.crt
+    volumes: ['./certs:/app/certs:ro']
+    restart: 'no'
+
   notification:
+    image: ${NOTIFICATION_IMAGE:-bao11/notification-service:0.1.0}
     build: .
     env_file: .env
-    ports: ['127.0.0.1:3005:3005']
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3005
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-notification_dev}:${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}@rabbitmq:5672
+      MIGRATION_DATABASE_URL: ''
+      SMTP_HOST: mailpit
+      DB_SSL_CA_PATH: /app/certs/supabase-ca.crt
+      JWT_PUBLIC_KEY_PATH: /app/keys/auth-public.pem
+    ports: ['127.0.0.1:${PORT:-3005}:3005']
     volumes:
       - ./keys:/app/keys:ro
       - ./certs:/app/certs:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports: ['127.0.0.1:5675:5672', '127.0.0.1:15675:15672']
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-notification_dev}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes: ['notification_rabbitmq:/var/lib/rabbitmq']
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
+    restart: unless-stopped
+
+networks:
+  default:
+    name: tablebooking-user3
+
+volumes:
+  notification_rabbitmq:
